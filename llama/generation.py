@@ -94,19 +94,28 @@ class Llama:
         # seed must be the same in all processes
         torch.manual_seed(seed)
 
-        if local_rank > 0:
-            sys.stdout = open(os.devnull, "w")
-
+        # if local_rank > 0:
+        #     sys.stdout = open(os.devnull, "w")
+        #
         start_time = time.time()
-        checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
-        assert len(checkpoints) > 0, f"no checkpoint files found in {ckpt_dir}"
-        assert model_parallel_size == len(
-            checkpoints
-        ), f"Loading a checkpoint for MP={len(checkpoints)} but world size is {model_parallel_size}"
-        ckpt_path = checkpoints[get_model_parallel_rank()]
-        checkpoint = torch.load(ckpt_path, map_location="cpu")
-        with open(Path(ckpt_dir) / "params.json", "r") as f:
-            params = json.loads(f.read())
+        # checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
+        # assert len(checkpoints) > 0, f"no checkpoint files found in {ckpt_dir}"
+        # assert model_parallel_size == len(
+        #     checkpoints
+        # ), f"Loading a checkpoint for MP={len(checkpoints)} but world size is {model_parallel_size}"
+        # ckpt_path = checkpoints[get_model_parallel_rank()]
+        # checkpoint = torch.load(ckpt_path, map_location="cpu")
+        # with open(Path(ckpt_dir) / "params.json", "r") as f:
+        #     params = json.loads(f.read())
+
+        params = {
+            "dim": 1024,
+            "multiple_of": 256,
+            "n_heads": 8,
+            "n_layers": 12,
+            "norm_eps": 1e-05,
+            "vocab_size": -1,
+        }
 
         model_args: ModelArgs = ModelArgs(
             max_seq_len=max_seq_len,
@@ -117,7 +126,17 @@ class Llama:
         model_args.vocab_size = tokenizer.n_words
         torch.set_default_tensor_type(torch.cuda.HalfTensor)
         model = Transformer(model_args)
-        model.load_state_dict(checkpoint, strict=False)
+
+        def init_weight(m):
+            if hasattr(m, "weight") and m.weight is not None:
+                torch.nn.init.normal_(m.weight, mean=0.0, std=0.02)
+            if hasattr(m, "bias") and m.bias is not None:
+                torch.nn.init.zeros_(m.bias)
+
+        model.apply(init_weight)
+        print("Model built with random initialization (no checkpoints).")
+
+        # model.load_state_dict(checkpoint, strict=False)
         print(f"Loaded in {time.time() - start_time:.2f} seconds")
 
         return Llama(model, tokenizer)

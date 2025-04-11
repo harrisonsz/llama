@@ -101,4 +101,5 @@ If a question does not make any sense, or is not factually coherent, explain why
 
 
 if __name__ == "__main__":
+    # torchrun --standalone --nproc_per_node=1 example_chat_completion.py   --ckpt_dir="."   --tokenizer_path="/home/sz/.llama/checkpoints/Llama-2-7b/tokenizer.model"   --max_seq_len=256   --max_batch_size=8   --max_gen_len=256
     fire.Fire(main)
