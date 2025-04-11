@@ -1,5 +1,6 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # This software may be used and distributed according to the terms of the Llama 2 Community License Agreement.
+import time
 
 import fire
 
@@ -53,12 +54,18 @@ def main(
         plush girafe => girafe peluche
         cheese =>""",
     ]
+    print("\n==================================\n")
+    start_time = time.time()
     results = generator.text_completion(
         prompts,
         max_gen_len=max_gen_len,
         temperature=temperature,
         top_p=top_p,
     )
+
+    end_time = time.time()
+    print("End generating. Time taken to generate is: ", end_time - start_time, " seconds.")
+    print("\n==================================\n")
     for prompt, result in zip(prompts, results):
         print(prompt)
         print(f"> {result['generation']}")

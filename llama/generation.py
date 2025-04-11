@@ -112,7 +112,7 @@ class Llama:
             "dim": 1024,
             "multiple_of": 256,
             "n_heads": 8,
-            "n_layers": 12,
+            "n_layers": 32,
             "norm_eps": 1e-05,
             "vocab_size": -1,
         }
