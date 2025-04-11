@@ -1,6 +1,6 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # This software may be used and distributed according to the terms of the Llama 2 Community License Agreement.
-
+import time
 from typing import List, Optional
 
 import fire
@@ -84,12 +84,18 @@ If a question does not make any sense, or is not factually coherent, explain why
             }
         ],
     ]
+    start_time = time.time()
+    print("\n==================================\n")
+    print("start generating...")
     results = generator.chat_completion(
         dialogs,  # type: ignore
         max_gen_len=max_gen_len,
         temperature=temperature,
         top_p=top_p,
     )
+    end_time = time.time()
+    print("End generating. Time taken to generate is: ", end_time - start_time, " seconds.")
+    print("\n==================================\n")
 
     for dialog, result in zip(dialogs, results):
         for msg in dialog:
