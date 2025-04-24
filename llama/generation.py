@@ -57,6 +57,7 @@ class Llama:
         max_batch_size: int,
         model_parallel_size: Optional[int] = None,
         seed: int = 1,
+        params: Optional[dict] = None,
     ) -> "Llama":
         """
         Build a Llama instance by initializing and loading a pre-trained model.
@@ -107,16 +108,6 @@ class Llama:
         # checkpoint = torch.load(ckpt_path, map_location="cpu")
         # with open(Path(ckpt_dir) / "params.json", "r") as f:
         #     params = json.loads(f.read())
-
-        params = {
-            "dim": 1024,
-            "multiple_of": 256,
-            "n_heads": 8,
-            "n_layers": 32,
-            "norm_eps": 1e-05,
-            "vocab_size": -1,
-        }
-
         model_args: ModelArgs = ModelArgs(
             max_seq_len=max_seq_len,
             max_batch_size=max_batch_size,
