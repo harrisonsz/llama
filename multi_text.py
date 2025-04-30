@@ -1,27 +1,60 @@
-import time
-import os
+#!/usr/bin/env python
+"""
+multi_text.py  –  Llama-2 PyTorch profiler
+
+* Sweeps over lists of `dims` and `n_layers` (defaults reproduce the OP grid).
+* For each combination runs:
+      • eager  – plain PyTorch
+      • graph  – torch.compile(fullgraph=True, dynamic=True)
+* Logs timing & peak-GPU-memory rows to `results_csv`.
+
+CSV columns:
+impl,dim,n_layers,n_heads,compile_s,exec_s,total_s,peak_gpu_MB,status
+"""
+
+from __future__ import annotations
+
 import csv
-from typing import List, Optional
+import os
+import time
+from itertools import product, islice
+from pathlib import Path
+from typing import Iterable, List, Sequence
 
 import fire
 import torch
-
+import torch._dynamo as dynamo
 from llama import Llama
 
-
-def chunkify(lst, chunk_size):
-    """Yield successive chunk_size-sized chunks from lst."""
-    for i in range(0, len(lst), chunk_size):
-        yield lst[i : i + chunk_size]
+# ────────────────────────── helpers ──────────────────────────────────────────
 
 
-def _log_metrics(row: list, csv_path: str):
-    """Append a single row of metrics to the CSV file, creating the header if needed."""
-    file_exists = os.path.isfile(csv_path)
-    with open(csv_path, "a", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        if not file_exists:
-            writer.writerow(
+def _parse_int_list(arg: str | Sequence[int]) -> List[int]:
+    """Accepts  '64,128'  |  '[64, 128]'  |  [64, 128]."""
+    if isinstance(arg, (list, tuple)):
+        return list(map(int, arg))
+    if isinstance(arg, str):
+        s = arg.strip()
+        if s.startswith("[") and s.endswith("]"):
+            return list(map(int, eval(s)))
+        return [int(x) for x in s.split(",") if x]
+    raise ValueError(f"Cannot parse integer list from {arg!r}")
+
+
+def chunkify(seq: List[str], size: int) -> Iterable[List[str]]:
+    it = iter(seq)
+    while True:
+        chunk = list(islice(it, size))
+        if not chunk:
+            return
+        yield chunk
+
+
+def _ensure_csv(path: Path) -> None:
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", newline="") as f:
+            csv.writer(f).writerow(
                 [
                     "impl",
                     "dim",
@@ -34,194 +67,162 @@ def _log_metrics(row: list, csv_path: str):
                     "status",
                 ]
             )
-        writer.writerow(row)
+
+
+def _append_row(path: Path, row: list) -> None:
+    with path.open("a", newline="") as f:
+        csv.writer(f).writerow(row)
+
+
+def _reset_cuda() -> None:
+    dynamo.reset()
+    torch.cuda.empty_cache()
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+
+
+# ──────────────────────────── main ───────────────────────────────────────────
 
 
 def main(
     ckpt_dir: str,
     tokenizer_path: str,
-    dim: int = 256,
-    n_layers: int = 4,
-    n_heads: int = 4,
-    prompt_file: Optional[str] = "./prompt.txt",
-    temperature: float = 0,
+    *,
+    dims: str = "64,128,256,512,1024",
+    layers: str = "2,4,6,8,9",
+    n_heads: int = 4,                 # fixed
+    prompt_file: str = "./prompt.txt",
+    temperature: float = 0.0,
     top_p: float = 0.9,
     max_seq_len: int = 60,
     max_gen_len: int = 60,
-    max_batch_size: int = 4,
-    graph_mode: bool = False,
+    max_batch_size: int = 10,
     results_csv: str = "pytorch_graph_metric.csv",
-):
-    """
-    Runs text completion on a single (dim, n_layers, n_heads) configuration.
-    Logs timing & memory metrics to a CSV file with columns:
-        impl, dim, n_layers, n_heads, compile_s, exec_s, total_s, peak_gpu_MB, status
+) -> None:
+    csv_path = Path(results_csv)
+    _ensure_csv(csv_path)
 
-    Usage (example):
-    ----------------
-    python test_pytorch_single_config.py \\
-        --ckpt_dir="." \\
-        --tokenizer_path="/path/to/tokenizer.model" \\
-        --dim=512 \\
-        --n_layers=4 \\
-        --n_heads=8 \\
-        --graph_mode=True
-    """
+    dims_l = _parse_int_list(dims)
+    layers_l = _parse_int_list(layers)
+    combos = list(product(dims_l, layers_l))
+    modes = ("eager", "graph")
 
-    # Set up model hyperparameters
-    params = {
-        "dim": dim,
-        "multiple_of": 256,  # if your model requires multiples
-        "n_heads": n_heads,
-        "n_layers": n_layers,
-        "norm_eps": 1e-05,
-        "vocab_size": -1,    # typically overridden in the checkpoint
-    }
-
-    impl = "graph" if graph_mode else "eager"
-    print(f"===== Running with config: {params} | mode={impl} =====")
-
-    # Prepare prompts
-    if prompt_file and os.path.exists(prompt_file):
+    # load prompts once
+    if prompt_file and os.path.isfile(prompt_file):
         with open(prompt_file, "r", encoding="utf-8") as f:
-            prompts: List[str] = [line.strip() for line in f if line.strip()]
+            prompts = [ln.strip() for ln in f if ln.strip()]
     else:
-        prompts = [
-            "I believe the meaning of life is",
-            "Simply put, the theory of relativity states that ",
-        ]
+        prompts = ["I believe the meaning of life is"]
 
-    # ============= Build Model =============
-    try:
-        model_build_start = time.time()
-        generator = Llama.build(
-            ckpt_dir=ckpt_dir,
-            tokenizer_path=tokenizer_path,
-            max_seq_len=max_seq_len,
-            max_batch_size=max_batch_size,
-            params=params,
-        )
-        torch.cuda.synchronize()
-        build_time = time.time() - model_build_start
-        print(f"Model built in {build_time:.2f} s.")
-    except Exception as e:
-        status = f"build-error: {e}"
-        _log_metrics(
-            [
-                impl,
-                dim,
-                n_layers,
-                n_heads,
-                0.0,   # compile_s
-                0.0,   # exec_s
-                0.0,   # total_s
-                0.0,   # peak_gpu_MB
-                status,
-            ],
-            results_csv,
-        )
-        print(f"[ERROR] Failed to build model: {e}")
-        return
+    total_runs = len(combos) * len(modes)
+    run_idx = 0
 
-    # ============= Graph Compilation (optional) =============
-    t_compile = 0.0
-    if graph_mode:
-        print("Compiling with torch.compile() ...")
-        try:
+    for dim, n_layers in combos:
+        params = {
+            "dim": dim,
+            "multiple_of": 256,
+            "n_heads": n_heads,
+            "n_layers": n_layers,
+            "norm_eps": 1e-5,
+            "vocab_size": -1,
+        }
+
+        for mode in modes:
+            run_idx += 1
+            tag = f"[{run_idx}/{total_runs}] dim={dim} L={n_layers} mode={mode}"
+            print("\n" + tag)
+
+            _reset_cuda()
+
+            # ---------------------- build model -----------------------------
+            try:
+                t0 = time.time()
+                gen = Llama.build(
+                    ckpt_dir=ckpt_dir,
+                    tokenizer_path=tokenizer_path,
+                    params=params,
+                    max_seq_len=max_seq_len,
+                    max_batch_size=max_batch_size,
+                )
+                torch.cuda.synchronize()
+                build_s = time.time() - t0
+                print(f" model built in {build_s:.2f}s")
+            except Exception as e:
+                _append_row(
+                    csv_path,
+                    [mode, dim, n_layers, n_heads, 0, 0, 0, 0, f"build-error:{e}"],
+                )
+                print(" build failed:", e)
+                continue
+
+            # ---------------------- optional compile ------------------------
+            compile_s = 0.0
+            if mode == "graph":
+                try:
+                    torch.cuda.synchronize()
+                    t0 = time.time()
+                    gen.model = torch.compile(
+                        gen.model,
+                        mode="reduce-overhead",
+                        fullgraph=True,
+                        dynamic=True,
+                    )
+                    _ = gen.text_completion(["warm-up"], max_gen_len=1, temperature=0, top_p=0)
+                    torch.cuda.synchronize()
+                    compile_s = time.time() - t0
+                    print(f" compiled in {compile_s:.2f}s")
+                except Exception as e:
+                    _append_row(
+                        csv_path,
+                        [mode, dim, n_layers, n_heads, 0, 0, 0, 0, f"compile-error:{e}"],
+                    )
+                    print(" compile failed:", e)
+                    continue
+
+            # ---------------------- execute ---------------------------------
             torch.cuda.synchronize()
             torch.cuda.reset_peak_memory_stats()
-            t_compile_start = time.time()
-            generator.model = torch.compile(
-                generator.model,
-                mode="reduce-overhead",
-                fullgraph=True,
-                dynamic=True,
-            )
-            # Force warm-up pass so we measure compilation overhead
-            _ = generator.text_completion(["warm-up"], max_gen_len=1, temperature=0.0, top_p=0.0)
+            t0 = time.time()
+            status = "success"
+            try:
+                for batch in chunkify(prompts, max_batch_size):
+                    _ = gen.text_completion(
+                        batch,
+                        max_gen_len=max_gen_len,
+                        temperature=temperature,
+                        top_p=top_p,
+                    )
+            except RuntimeError as e:
+                status = f"OOM:{e}"
+            except Exception as e:
+                status = f"error:{e}"
             torch.cuda.synchronize()
-            t_compile = time.time() - t_compile_start
-            print(f"Compilation time: {t_compile:.2f} s.")
-        except Exception as e:
-            status = f"compile-error: {e}"
-            _log_metrics(
+            exec_s = time.time() - t0
+            peak_mb = (
+                torch.cuda.max_memory_allocated() / (1024**2)
+                if torch.cuda.is_available()
+                else 0.0
+            )
+
+            _append_row(
+                csv_path,
                 [
-                    impl,
+                    mode,
                     dim,
                     n_layers,
                     n_heads,
-                    0.0,   # compile_s
-                    0.0,   # exec_s
-                    0.0,   # total_s
-                    0.0,   # peak_gpu_MB
+                    f"{compile_s:.4f}",
+                    f"{exec_s:.4f}",
+                    f"{compile_s + exec_s:.4f}",
+                    f"{peak_mb:.1f}",
                     status,
                 ],
-                results_csv,
             )
-            print(f"[ERROR] Graph compilation failed: {e}")
-            return
-
-    # ============= Measure Execution =============
-    print("Starting text generation...")
-    torch.cuda.synchronize()
-    torch.cuda.reset_peak_memory_stats()
-    t_exec_start = time.time()
-
-    status = "success"
-    all_results = []
-    try:
-        # Generate results in small batches
-        for batch_prompts in chunkify(prompts, max_batch_size):
-            batch_results = generator.text_completion(
-                batch_prompts,
-                max_gen_len=max_gen_len,
-                temperature=temperature,
-                top_p=top_p,
+            print(
+                f" logged: compile {compile_s:.2f}s | exec {exec_s:.2f}s |"
+                f" peak {peak_mb:.0f} MB | {status}"
             )
-            all_results.extend(batch_results)
-    except RuntimeError as rt_err:
-        status = f"OOM: {rt_err}"
-        print("[ERROR] Out of memory or runtime error.")
-    except Exception as e:
-        status = f"error: {e}"
-        print(f"[ERROR] Generation failed: {e}")
-    finally:
-        torch.cuda.synchronize()
-        t_exec = time.time() - t_exec_start
-        peak_gpu_mb = torch.cuda.max_memory_allocated() / (1024 * 1024)
-        total_s = t_compile + t_exec
-
-        # Log metrics
-        _log_metrics(
-            [
-                impl,
-                dim,
-                n_layers,
-                n_heads,
-                f"{t_compile:.4f}",
-                f"{t_exec:.4f}",
-                f"{total_s:.4f}",
-                f"{peak_gpu_mb:.2f}",
-                status,
-            ],
-            results_csv,
-        )
-
-    # ============= Print Results (if successful) =============
-    if status == "success":
-        for prompt_text, out_dict in zip(prompts, all_results):
-            print("==================================")
-            print(f"Prompt:\n{prompt_text}")
-            print("\nCompletion:")
-            print(out_dict["generation"])
-            print("==================================\n")
 
 
 if __name__ == "__main__":
-    # Example command:
-    # python test_pytorch_single_config.py \
-    #    --ckpt_dir="." \
-    #    --tokenizer_path="/path/to/tokenizer.model" \
-    #    --dim=512 --n_layers=4 --n_heads=8 \
-    #    --graph_mode=True
     fire.Fire(main)
