@@ -88,8 +88,8 @@ def main(
     ckpt_dir: str,
     tokenizer_path: str,
     *,
-    dims: str = "64,128,256,512,1024",
-    layers: str = "2,4,6,8,9",
+    dims: str = "128,256,512,1024,2048",
+    layers: str = "1,2,4,6,8",
     n_heads: int = 4,                 # fixed
     prompt_file: str = "./prompt.txt",
     temperature: float = 0.0,
