@@ -115,7 +115,7 @@ class Llama:
         )
         tokenizer = Tokenizer(model_path=tokenizer_path)
         model_args.vocab_size = tokenizer.n_words
-        torch.set_default_tensor_type(torch.cuda.HalfTensor)
+        torch.set_default_tensor_type(torch.cuda.FloatTensor)
         model = Transformer(model_args)
 
         def init_weight(m):
