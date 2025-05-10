@@ -1,13 +1,13 @@
 #!/usr/bin/env python
 """
-run_once.py – Llama-2 PyTorch profiler (eager mode only)
+run_once_graph.py – Llama-2 PyTorch profiler (graph mode via torch.compile)
 
-• Builds the model once (regular eager execution).
+• Builds the model once (graph mode).
 • Executes the prompt batch once.
-• Logs timing & peak-GPU-memory to a CSV.
+• Logs compile time, execution time & peak-GPU-memory to a CSV.
 
 CSV columns:
-dim,n_layers,n_heads,exec_s,peak_gpu_MB,status
+impl,dim,batch_size,seq_len,n_layers,n_heads,compile_s,exec_s,total_s,peak_gpu_MB,status
 """
 
 from __future__ import annotations
@@ -42,13 +42,13 @@ def _ensure_csv(path: Path) -> None:
         with path.open("w", newline="") as f:
             csv.writer(f).writerow(
                 [
-                    "impl",          # "eager"
+                    "impl",          # "graph"
                     "dim",
                     "batch_size",
                     "seq_len",
                     "n_layers",
                     "n_heads",
-                    "compile_s",     # always 0 for eager
+                    "compile_s",
                     "exec_s",
                     "total_s",
                     "peak_gpu_MB",
@@ -73,8 +73,8 @@ def _reset_cuda() -> None:
 def main(
     tokenizer_path: str,
     *,
-    dim: int = 1024,
-    n_layers: int = 12,
+    dim: int = 512,
+    n_layers: int = 6,
     n_heads: int = 4,
     prompt_file: str | None = "./prompt.txt",
     prompt: str | None = None,
@@ -85,8 +85,7 @@ def main(
     batch_size: int = 32,
     results_csv: str = "single_run.csv",
 ) -> None:
-    """Run a single configuration in eager mode."""
-    # global results
+    """Run a single configuration in graph mode with torch.compile."""
     csv_path = Path(results_csv)
     _ensure_csv(csv_path)
 
@@ -108,7 +107,7 @@ def main(
         "vocab_size": -1,
     }
 
-    print(f"\ndim={dim} | layers={n_layers} | eager mode\n")
+    print(f"\ndim={dim} | layers={n_layers} | graph mode (torch.compile)\n")
 
     _reset_cuda()
 
@@ -122,13 +121,23 @@ def main(
     )
     torch.cuda.synchronize()
 
+    # ---------------------- compile model ---------------------------
+    # If you want to compile only the forward pass, you can compile gen.model.
+    # If text_completion is also heavily PyTorch-bound, you could compile
+    # a wrapper function. Below is the minimal version that compiles the model.
+    t_compile_start = time.time()
+    # The internal model is typically in `gen.model`
+    gen.model = torch.compile(gen.model, mode="default")
+    torch.cuda.synchronize()
+    compile_s = time.time() - t_compile_start
+
     # ---------------------- execute ---------------------------------
     status = "success"
     torch.cuda.reset_peak_memory_stats()
     t0 = time.time()
     try:
         for batch in chunkify(prompts, batch_size):
-            results = gen.text_completion(
+            _ = gen.text_completion(
                 batch,
                 max_gen_len=max_gen_len,
                 temperature=temperature,
@@ -145,22 +154,17 @@ def main(
         if torch.cuda.is_available()
         else 0.0
     )
-    # for prompt, result in zip(prompts, results):
-    #     print(prompt)
-    #     print(f"> {result['generation']}")
-    #     print("\n==================================\n")
 
     # ───────── after generation finishes ─────────
-    compile_s = 0.0
-    total_s = exec_s  # no compile step in eager mode
+    total_s = compile_s + exec_s
 
     _append_row(
         csv_path,
         [
-            "eager",
+            "graph",              # impl
             dim,
             batch_size,
-            max_seq_len,
+            max_seq_len,          # seq_len (input context length requested)
             n_layers,
             n_heads,
             f"{compile_s:.4f}",
@@ -171,7 +175,8 @@ def main(
         ],
     )
     print(
-        f" logged: exec {exec_s:.2f}s | peak {peak_mb:.0f} MB | {status}"
+        f" logged: compile {compile_s:.2f}s | exec {exec_s:.2f}s "
+        f"| peak {peak_mb:.0f} MB | {status}"
     )
 
 
