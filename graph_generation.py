@@ -83,7 +83,7 @@ def main(
     max_seq_len: int = 60,
     max_gen_len: int = 60,
     batch_size: int = 32,
-    results_csv: str = "single_run.csv",
+    results_csv: str = "eager_graph_data.csv",
 ) -> None:
     """Run a single configuration in graph mode with torch.compile."""
     csv_path = Path(results_csv)
