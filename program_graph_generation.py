@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-run_once_graph.py – Llama-2 PyTorch profiler (graph mode via torch.compile)
+program_graph_generation.py – Llama-2 PyTorch profiler (graph mode via torch.compile)
 
 • Builds the model once (graph mode).
 • Executes the prompt batch once.
@@ -22,6 +22,7 @@ from typing import Iterable, List
 import fire
 import torch
 import torch._dynamo as dynamo
+import torch.distributed as dist
 from llama import Llama
 
 
@@ -69,7 +70,9 @@ def _reset_cuda() -> None:
         torch.cuda.reset_peak_memory_stats()
 
 
-# ──────────────────────────── main ───────────────────────────────────────────
+# Make CUDA float the global default if desired
+torch.set_default_tensor_type(torch.cuda.FloatTensor)
+
 def main(
     tokenizer_path: str,
     *,
@@ -84,8 +87,15 @@ def main(
     max_gen_len: int = 60,
     batch_size: int = 32,
     results_csv: str = "single_run.csv",
+    # Extra args for measuring compile vs. exec
+    compile_s: float = 0.0,
+    skip_gen: bool = False,
 ) -> None:
-    """Run a single configuration in graph mode with torch.compile."""
+    """
+    Run a single configuration in graph mode. The function no longer decorates with @torch.compile
+    so that we can measure compile_s separately outside this function.
+    If skip_gen=True, we skip the actual generation (dummy call) just to trigger compilation.
+    """
     csv_path = Path(results_csv)
     _ensure_csv(csv_path)
 
@@ -121,15 +131,10 @@ def main(
     )
     torch.cuda.synchronize()
 
-    # ---------------------- compile model ---------------------------
-    # If you want to compile only the forward pass, you can compile gen.model.
-    # If text_completion is also heavily PyTorch-bound, you could compile
-    # a wrapper function. Below is the minimal version that compiles the model.
-    t_compile_start = time.time()
-    # The internal model is typically in `gen.model`
-    gen.model = torch.compile(gen.model, mode="default")
-    torch.cuda.synchronize()
-    compile_s = time.time() - t_compile_start
+    # If we're just here to force a dummy compile, skip the real generation
+    if skip_gen:
+        # Return early, no CSV row needed
+        return
 
     # ---------------------- execute ---------------------------------
     status = "success"
@@ -155,16 +160,15 @@ def main(
         else 0.0
     )
 
-    # ───────── after generation finishes ─────────
     total_s = compile_s + exec_s
 
     _append_row(
         csv_path,
         [
-            "graph-model",              # impl
+            "graph-program",
             dim,
             batch_size,
-            max_seq_len,          # seq_len (input context length requested)
+            max_seq_len,
             n_layers,
             n_heads,
             f"{compile_s:.4f}",
@@ -181,4 +185,35 @@ def main(
 
 
 if __name__ == "__main__":
-    fire.Fire(main)
+
+    def _run(**kwargs):
+        """
+        1) Force the compile (dummy call) & measure compile time
+        2) Actual run & measure exec time
+        """
+        _reset_cuda()
+
+        # Measure how long it takes to compile the main function
+        t_compile_start = time.time()
+        compiled_main = torch.compile(main, mode="default")
+        # Trigger a dummy run so that actual compilation happens
+        compiled_main(**kwargs, skip_gen=True)
+        torch.cuda.synchronize()
+        compile_s = time.time() - t_compile_start
+
+        # Now measure the real execution time
+        torch.cuda.reset_peak_memory_stats()
+        t0 = time.time()
+        compiled_main(**kwargs, compile_s=compile_s, skip_gen=False)
+        torch.cuda.synchronize()
+        exec_s = time.time() - t0
+
+        # We don't append CSV rows here; that happens inside main(...)
+        # so it already has compile_s & exec_s.
+
+    # Use Fire to parse command line, then call _run(...)
+    fire.Fire(_run)
+
+    # If you had an init_process_group call, you'd also destroy it here:
+    if dist.is_available() and dist.is_initialized():
+        dist.destroy_process_group()
