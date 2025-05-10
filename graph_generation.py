@@ -128,6 +128,7 @@ def main(
     t_compile_start = time.time()
     # The internal model is typically in `gen.model`
     gen.model = torch.compile(gen.model, mode="default")
+    _ = gen.text_completion(["warm-up"], max_gen_len=1, temperature=0, top_p=0)
     torch.cuda.synchronize()
     compile_s = time.time() - t_compile_start
 
@@ -161,7 +162,7 @@ def main(
     _append_row(
         csv_path,
         [
-            "graph-model",              # impl
+            "graph",              # impl
             dim,
             batch_size,
             max_seq_len,          # seq_len (input context length requested)
