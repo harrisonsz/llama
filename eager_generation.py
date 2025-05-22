@@ -116,14 +116,14 @@ class GPUUtilizationMonitor:
 def main(
     tokenizer_path: str,
     *,
-    dim: int = 1024,
+    dim: int = 2048,
     n_layers: int = 12,
     n_heads: int = 4,
     prompt_file: str | None = "./prompt.txt",
     temperature: float = 0.0,
     top_p: float = 0.9,
-    max_seq_len: int = 800,
-    batch_size: int = 64,
+    max_seq_len: int = 1600,
+    batch_size: int = 32,
     results_csv: str = "eager_graph_data.csv",
 ) -> None:
     """Run a single configuration in eager mode."""
@@ -152,19 +152,20 @@ def main(
     monitor = GPUUtilizationMonitor(interval=0.001)
     torch.cuda.reset_peak_memory_stats()
     t0 = time.time()
-    gen = Llama.build(
-        ckpt_dir="",
-        tokenizer_path=tokenizer_path,
-        params=params,
-        max_seq_len=max_seq_len,
-        max_batch_size=batch_size,
-    )
-    torch.cuda.synchronize()
-
-    # ---------------------- execute ---------------------------------
-    status = "success"
-    monitor.start()
     try:
+        gen = Llama.build(
+            ckpt_dir="",
+            tokenizer_path=tokenizer_path,
+            params=params,
+            max_seq_len=max_seq_len,
+            max_batch_size=batch_size,
+        )
+        torch.cuda.synchronize()
+
+        # ---------------------- execute ---------------------------------
+        status = "success"
+        monitor.start()
+
         for batch in chunkify(prompts, batch_size):
             results = gen.text_completion(
                 batch,
@@ -173,7 +174,7 @@ def main(
                 top_p=top_p,
             )
     except RuntimeError as e:
-        status = f"OOM:{e}"
+        status = "OOM"
     except Exception as e:
         status = f"error:{e}"
     monitor.stop()
@@ -181,7 +182,10 @@ def main(
     exec_s = time.time() - t0
 
     busy_samples = [u for u in monitor._samples if u > 0]
-    avg_util = sum(busy_samples) / len(busy_samples)
+    if len(busy_samples) == 0:
+        avg_util = 0.0
+    else:
+        avg_util = sum(busy_samples) / len(busy_samples)
     peak_mb = (
         torch.cuda.max_memory_allocated() / (1024**2)
         if torch.cuda.is_available()

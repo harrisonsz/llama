@@ -152,24 +152,24 @@ def main(
     monitor.start()
     torch.cuda.synchronize()
     t_compile_start = time.time()
-    gen = Llama.build(
-        ckpt_dir="",
-        tokenizer_path=tokenizer_path,
-        params=params,
-        max_seq_len=max_seq_len,
-        max_batch_size=batch_size,
-    )
-
-    gen.model = torch.compile(gen.model, mode="default")
-    _ = gen.text_completion(["warm-up"], max_gen_len=1, temperature=0, top_p=0)
-    torch.cuda.synchronize()
-    compile_s = time.time() - t_compile_start
-
-    # ---------------------- execute ---------------------------------
-    status = "success"
-    torch.cuda.reset_peak_memory_stats()
-    t0 = time.time()
     try:
+        gen = Llama.build(
+            ckpt_dir="",
+            tokenizer_path=tokenizer_path,
+            params=params,
+            max_seq_len=max_seq_len,
+            max_batch_size=batch_size,
+        )
+
+        gen.model = torch.compile(gen.model, mode="default")
+        _ = gen.text_completion(["warm-up"], max_gen_len=1, temperature=0, top_p=0)
+        torch.cuda.synchronize()
+        compile_s = time.time() - t_compile_start
+
+        # ---------------------- execute ---------------------------------
+        status = "success"
+        torch.cuda.reset_peak_memory_stats()
+        t0 = time.time()
         for batch in chunkify(prompts, batch_size):
             _ = gen.text_completion(
                 batch,
@@ -178,15 +178,20 @@ def main(
                 top_p=top_p,
             )
     except RuntimeError as e:
-        status = f"OOM:{e}"
+        status = "OOM"
+        t0 = time.time()
     except Exception as e:
         status = f"error:{e}"
+        t0 = time.time()
     torch.cuda.synchronize()
     exec_s = time.time() - t0
     monitor.stop()
 
     busy_samples = [u for u in monitor._samples if u > 0]
-    avg_util = sum(busy_samples) / len(busy_samples)
+    if len(busy_samples) == 0:
+        avg_util = 0.0
+    else:
+        avg_util = sum(busy_samples) / len(busy_samples)
     peak_mb = (
         torch.cuda.max_memory_allocated() / (1024**2)
         if torch.cuda.is_available()

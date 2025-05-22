@@ -21,7 +21,7 @@ for impl in "${IMPLEMENTATIONS[@]}"; do
           script="../${impl}_generation.py"
           "${TORCHRUN[@]}" "$script" \
             --tokenizer_path "$TOKENIZER" \
-            --prompt_file= "$PROMPT_FILE" \
+            --prompt_file "$PROMPT_FILE" \
             --batch_size "$b" \
             --max_seq_len "$s" \
             --n_layers "$l" \
