@@ -74,15 +74,14 @@ def main(
     tokenizer_path: str,
     *,
     dim: int = 512,
-    n_layers: int = 6,
+    n_layers: int = 12,
     n_heads: int = 4,
     prompt_file: str | None = "./prompt.txt",
     prompt: str | None = None,
     temperature: float = 0.0,
     top_p: float = 0.9,
-    max_seq_len: int = 60,
-    max_gen_len: int = 60,
-    batch_size: int = 32,
+    max_seq_len: int = 800,
+    batch_size: int = 64,
     results_csv: str = "eager_graph_data.csv",
 ) -> None:
     """Run a single configuration in eager mode."""
@@ -113,6 +112,8 @@ def main(
     _reset_cuda()
 
     # ---------------------- build model -----------------------------
+    torch.cuda.reset_peak_memory_stats()
+    t0 = time.time()
     gen = Llama.build(
         ckpt_dir="",
         tokenizer_path=tokenizer_path,
@@ -124,13 +125,11 @@ def main(
 
     # ---------------------- execute ---------------------------------
     status = "success"
-    torch.cuda.reset_peak_memory_stats()
-    t0 = time.time()
     try:
         for batch in chunkify(prompts, batch_size):
             results = gen.text_completion(
                 batch,
-                max_gen_len=max_gen_len,
+                max_gen_len=max_seq_len,
                 temperature=temperature,
                 top_p=top_p,
             )

@@ -112,6 +112,8 @@ def main(
     _reset_cuda()
 
     # ---------------------- build model -----------------------------
+    torch.cuda.synchronize()
+    t_compile_start = time.time()
     gen = Llama.build(
         ckpt_dir="",
         tokenizer_path=tokenizer_path,
@@ -119,14 +121,7 @@ def main(
         max_seq_len=max_seq_len,
         max_batch_size=batch_size,
     )
-    torch.cuda.synchronize()
 
-    # ---------------------- compile model ---------------------------
-    # If you want to compile only the forward pass, you can compile gen.model.
-    # If text_completion is also heavily PyTorch-bound, you could compile
-    # a wrapper function. Below is the minimal version that compiles the model.
-    t_compile_start = time.time()
-    # The internal model is typically in `gen.model`
     gen.model = torch.compile(gen.model, mode="default")
     _ = gen.text_completion(["warm-up"], max_gen_len=1, temperature=0, top_p=0)
     torch.cuda.synchronize()
