@@ -81,7 +81,6 @@ def main(
     temperature: float = 0.0,
     top_p: float = 0.9,
     max_seq_len: int = 60,
-    max_gen_len: int = 60,
     batch_size: int = 32,
     results_csv: str = "eager_graph_data.csv",
 ) -> None:
@@ -135,7 +134,7 @@ def main(
         for batch in chunkify(prompts, batch_size):
             _ = gen.text_completion(
                 batch,
-                max_gen_len=max_gen_len,
+                max_gen_len=max_seq_len,
                 temperature=temperature,
                 top_p=top_p,
             )

@@ -73,7 +73,7 @@ def _reset_cuda() -> None:
 def main(
     tokenizer_path: str,
     *,
-    dim: int = 512,
+    dim: int = 1024,
     n_layers: int = 12,
     n_heads: int = 4,
     prompt_file: str | None = "./prompt.txt",
