@@ -180,9 +180,11 @@ def main(
     except RuntimeError as e:
         status = "OOM"
         t0 = time.time()
+        compile_s = time.time()
     except Exception as e:
         status = f"error:{e}"
         t0 = time.time()
+        compile_s = time.time()
     torch.cuda.synchronize()
     exec_s = time.time() - t0
     monitor.stop()
