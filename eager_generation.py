@@ -15,6 +15,7 @@ from __future__ import annotations
 import csv
 import os
 import time
+import threading
 from itertools import islice
 from pathlib import Path
 from typing import Iterable, List
@@ -52,6 +53,7 @@ def _ensure_csv(path: Path) -> None:
                     "exec_s",
                     "total_s",
                     "peak_gpu_MB",
+                    "gpu_util",
                     "status",
                 ]
             )
@@ -67,6 +69,47 @@ def _reset_cuda() -> None:
     torch.cuda.empty_cache()
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()
+
+
+class GPUUtilizationMonitor:
+    """Background GPU utilization sampler using pynvml if available."""
+
+    def __init__(self, interval: float = 0.5) -> None:
+        self.interval = interval
+        self._running = False
+        self._samples: list[float] = []
+        self._thread: threading.Thread | None = None
+
+    def _get_utilization(self) -> float:
+        try:
+            import pynvml
+
+            pynvml.nvmlInit()
+            handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+            gpu_util = float(util.gpu)
+            pynvml.nvmlShutdown()
+            return gpu_util
+        except Exception:
+            return 0.0
+
+    def _run(self) -> None:
+        while self._running:
+            self._samples.append(self._get_utilization())
+            time.sleep(self.interval)
+
+    def start(self) -> None:
+        self._running = True
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._running = False
+        if self._thread is not None:
+            self._thread.join()
+
+    def average(self) -> float:
+        return sum(self._samples) / len(self._samples) if self._samples else 0.0
 
 
 # ──────────────────────────── main ───────────────────────────────────────────
@@ -112,6 +155,7 @@ def main(
     _reset_cuda()
 
     # ---------------------- build model -----------------------------
+    monitor = GPUUtilizationMonitor(interval=0.001)
     torch.cuda.reset_peak_memory_stats()
     t0 = time.time()
     gen = Llama.build(
@@ -125,6 +169,7 @@ def main(
 
     # ---------------------- execute ---------------------------------
     status = "success"
+    monitor.start()
     try:
         for batch in chunkify(prompts, batch_size):
             results = gen.text_completion(
@@ -137,8 +182,12 @@ def main(
         status = f"OOM:{e}"
     except Exception as e:
         status = f"error:{e}"
+    monitor.stop()
     torch.cuda.synchronize()
     exec_s = time.time() - t0
+
+    busy_samples = [u for u in monitor._samples if u > 0]
+    avg_util = sum(busy_samples) / len(busy_samples)
     peak_mb = (
         torch.cuda.max_memory_allocated() / (1024**2)
         if torch.cuda.is_available()
@@ -166,11 +215,12 @@ def main(
             f"{exec_s:.4f}",
             f"{total_s:.4f}",
             f"{peak_mb:.1f}",
+            f"{avg_util:.1f}",
             status,
         ],
     )
     print(
-        f" logged: exec {exec_s:.2f}s | peak {peak_mb:.0f} MB | {status}"
+        f" logged: exec {exec_s:.2f}s | peak {peak_mb:.0f} MB | util {avg_util:.1f}% | {status}"
     )
 
 
