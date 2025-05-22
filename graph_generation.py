@@ -120,7 +120,6 @@ def main(
     n_layers: int = 6,
     n_heads: int = 4,
     prompt_file: str | None = "./prompt.txt",
-    prompt: str | None = None,
     temperature: float = 0.0,
     top_p: float = 0.9,
     max_seq_len: int = 60,
@@ -132,13 +131,8 @@ def main(
     _ensure_csv(csv_path)
 
     # Load prompts
-    if prompt is not None:
-        prompts = [prompt]
-    elif prompt_file and os.path.isfile(prompt_file):
-        with open(prompt_file, "r", encoding="utf-8") as f:
-            prompts = [ln.strip() for ln in f if ln.strip()][:batch_size]
-    else:
-        prompts = ["I believe the meaning of life is"]
+    with open(prompt_file, "r", encoding="utf-8") as f:
+        prompts = [ln.strip() for ln in f if ln.strip()][:batch_size]
 
     params = {
         "dim": dim,
