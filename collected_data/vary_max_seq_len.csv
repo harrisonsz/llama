@@ -1,0 +1,6 @@
+impl,dim,batch_size,seq_len,n_layers,n_heads,compile_s,exec_s,total_s,peak_gpu_MB,gpu_util,status
+eager,512,32,100,8,4,0.0000,0.5126,0.5126,347.8,8.7,success
+eager,512,32,200,8,4,0.0000,0.7528,0.7528,454.2,32.5,success
+eager,512,32,400,8,4,0.0000,1.3213,1.3213,683.1,64.5,success
+eager,512,32,800,8,4,0.0000,2.9274,2.9274,1092.8,80.9,success
+eager,512,32,1600,8,4,0.0000,8.1853,8.1853,1944.7,92.6,success
