@@ -4,7 +4,7 @@ set -euo pipefail
 
 TOKENIZER="../tokenizer.model"
 PROMPT_FILE="../prompt.txt"
-CSV="../collected_data/vary_batch_size.csv"
+CSV="../collected_data/torch_vary_batch_size.csv"
 TORCHRUN=(torchrun --standalone --nproc_per_node=1)
 
 BATCH_SIZES=(4 8 16 32 64)

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 TOKENIZER="../tokenizer.model"
-CSV="../collected_data/vary_max_seq_len.csv"
+CSV="../collected_data/torch_vary_max_seq_len.csv"
 PROMPT_FILE="../prompt.txt"
 TORCHRUN=(torchrun --standalone --nproc_per_node=1)
 
